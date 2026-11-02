@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#172b4d">
+<meta name="description" content="한국사와 세계사 문제를 풀며 미로를 탈출하는 10단계 게임">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>역사 미로 탈출</title>
+<style>
+html,body { margin:0; min-height:100%; background:#eef2f7; }
+body { padding:14px 8px 28px; box-sizing:border-box; }
+#mazeGame { background:white; border-radius:18px; padding:14px; box-shadow:0 4px 22px #172b4d18; }
+</style>
+</head>
+<body>
+
+<div id="mazeGame" style="font-family:Arial,sans-serif;max-width:850px;margin:auto;text-align:center;color:#222">
+  <h2>미로 게임</h2>
+  <div style="display:flex;justify-content:center;gap:18px;flex-wrap:wrap;font-size:18px;margin:12px">
+    <div>🏆 스테이지: <b id="stage">1 / 10</b></div>
+    <div>⏱️ 시간: <b id="timer">600</b>초</div>
+    <div>❤️ 목숨: <b id="lives">3</b></div>
+    <div>📝 문제: <b id="progress">0 / 5</b></div>
+  </div>
+  <canvas id="mazeCanvas" width="620" height="620"
+    style="width:min(100%,620px);border:3px solid #333;background:#fff;display:block;margin:auto"></canvas>
+  <p>WASD 또는 방향키를 눌러 미로를 이동하세요.</p>
+  <div id="touchControls" aria-label="모바일 이동 버튼">
+    <button data-dir="up" aria-label="위로">▲</button>
+    <div class="touch-row">
+      <button data-dir="left" aria-label="왼쪽">◀</button>
+      <button data-dir="down" aria-label="아래">▼</button>
+      <button data-dir="right" aria-label="오른쪽">▶</button>
+    </div>
+  </div>
+  <div id="message" style="font-weight:bold;margin:10px;min-height:28px">미로를 탈출하세요!</div>
+
+  <div id="quiz" style="display:none;border:2px solid #555;border-radius:12px;padding:18px;margin:15px auto;max-width:600px">
+    <h3 id="questionTitle"></h3>
+    <p id="questionText" style="font-size:18px"></p>
+    <div id="choices" style="display:grid;gap:10px"></div>
+    <p id="feedback" style="font-weight:bold;white-space:pre-line"></p>
+  </div>
+
+  <div id="stageButtons" style="display:none;margin:18px">
+    <button id="nextStage" style="padding:14px 25px;font-size:18px;background:#1976d2;color:white;border:0;border-radius:8px;cursor:pointer">
+      다음 스테이지 가기
+    </button>
+  </div>
+
+  <button id="restart" style="padding:12px 25px;font-size:16px;margin:10px;cursor:pointer">처음부터 다시 시작</button>
+</div>
+
+<style>
+#mazeGame button.choice {
+  padding:12px;
+  border:1px solid #777;
+  border-radius:8px;
+  background:#f4f4f4;
+  font-size:16px;
+  cursor:pointer;
+}
+#mazeGame button.choice:hover {background:#ddd}
+#mazeGame button:disabled {opacity:.6;cursor:default}
+
+#touchControls { display:none; margin:14px auto; width:190px; }
+#touchControls button {
+  width:56px;height:48px;border:0;border-radius:10px;
+  background:#263238;color:white;font-size:22px;touch-action:none;
+}
+#touchControls .touch-row { display:flex;justify-content:space-between;gap:8px;margin-top:6px; }
+@media (pointer:coarse) {
+  #touchControls { display:block; }
+  #mazeGame p { line-height:1.5; }
+}
+@media (max-width:520px) {
+  #mazeGame { padding:8px; }
+  #mazeCanvas { height:auto; }
+  #mazeGame h2 { font-size:22px; }
+}
+</style>
+
+<script>
+(() => {
+const MAX_STAGE = 10;
+const canvas = document.getElementById("mazeCanvas");
+const ctx = canvas.getContext("2d");
+
+const timerEl = document.getElementById("timer");
+const livesEl = document.getElementById("lives");
+const stageEl = document.getElementById("stage");
+const progressEl = document.getElementById("progress");
+const messageEl = document.getElementById("message");
+const quizEl = document.getElementById("quiz");
+const questionText = document.getElementById("questionText");
+const questionTitle = document.getElementById("questionTitle");
+const choicesEl = document.getElementById("choices");
+const feedbackEl = document.getElementById("feedback");
+const stageButtons = document.getElementById("stageButtons");
+const nextStageButton = document.getElementById("nextStage");
+
+let stage = 1;
+let SIZE = 31;
+let TILE = 20;
+let maze, player;
+let lives = 3;
+let timeLeft = 600;
+let gameOver = false;
+let won = false;
+let inQuiz = false;
+let quizSet = [];
+let questionIndex = 0;
+let timerId = null;
+let moveInterval = null;
+let feedbackTimeout = null;
+let keys = {};
+
+function getStageTime(s) {
+  if (s <= 3) return 600;
+  if (s <= 7) return 300;
+  return 180;
+}
+
+function getStageLives(s) {
+  if (s <= 5) return 3;
+  if (s <= 9) return 2;
+  return 1;
+}
+
+const questionStages = [
+[
+ {q:"대한민국의 광복일은 언제인가요?",c:["1945년 8월 15일","1948년 8월 15일","1919년 3월 1일"],a:0,e:"1945년 8월 15일은 광복절입니다."},
+ {q:"훈민정음을 창제한 왕은 누구인가요?",c:["태종","세종대왕","정조"],a:1,e:"세종대왕은 훈민정음을 창제했습니다."},
+ {q:"고려를 건국한 인물은 누구인가요?",c:["왕건","이성계","궁예"],a:0,e:"왕건은 고려를 건국했습니다."},
+ {q:"태양계에서 가장 큰 행성은 무엇인가요?",c:["지구","목성","화성"],a:1,e:"목성은 태양계에서 가장 큰 행성입니다."},
+ {q:"물의 화학식은 무엇인가요?",c:["CO2","H2O","O2"],a:1,e:"물의 화학식은 H2O입니다."}
+],
+[
+ {q:"조선을 건국한 인물은 누구인가요?",c:["이성계","세종대왕","장영실"],a:0,e:"이성계는 1392년에 조선을 건국했습니다."},
+ {q:"임진왜란이 시작된 해는 언제인가요?",c:["1592년","1636년","1453년"],a:0,e:"임진왜란은 1592년에 시작되었습니다."},
+ {q:"식물이 광합성할 때 흡수하는 기체는 무엇인가요?",c:["산소","질소","이산화탄소"],a:2,e:"식물은 광합성 과정에서 이산화탄소를 흡수합니다."},
+ {q:"전류의 단위는 무엇인가요?",c:["볼트","암페어","옴"],a:1,e:"전류의 단위는 암페어(A)입니다."},
+ {q:"지구의 자연 위성은 무엇인가요?",c:["달","태양","금성"],a:0,e:"달은 지구의 자연 위성입니다."}
+],
+[
+ {q:"3·1 운동이 일어난 해는 언제인가요?",c:["1910년","1919년","1945년"],a:1,e:"3·1 운동은 1919년에 일어났습니다."},
+ {q:"거북선을 지휘한 장군은 누구인가요?",c:["강감찬","이순신","을지문덕"],a:1,e:"이순신 장군은 임진왜란 당시 수군을 지휘했습니다."},
+ {q:"전압의 단위는 무엇인가요?",c:["볼트","와트","암페어"],a:0,e:"전압의 단위는 볼트(V)입니다."},
+ {q:"빛이 물속으로 들어가며 방향이 꺾이는 현상은?",c:["반사","굴절","증발"],a:1,e:"빛의 진행 방향이 바뀌는 현상을 굴절이라고 합니다."},
+ {q:"물은 표준 대기압에서 몇 도에 끓나요?",c:["50℃","100℃","150℃"],a:1,e:"물은 표준 대기압에서 100℃에 끓습니다."}
+],
+[
+ {q:"대한민국 정부가 수립된 해는 언제인가요?",c:["1945년","1948년","1950년"],a:1,e:"대한민국 정부는 1948년에 수립되었습니다."},
+ {q:"측우기 제작에 참여한 조선 시대 과학자는 누구인가요?",c:["장영실","이순신","김홍도"],a:0,e:"장영실은 측우기 등 여러 과학 기구 제작에 참여했습니다."},
+ {q:"자석의 같은 극끼리는 어떻게 작용하나요?",c:["끌어당긴다","밀어낸다","작용하지 않는다"],a:1,e:"자석의 같은 극끼리는 서로 밀어냅니다."},
+ {q:"소리가 전달되기 위해 필요한 것은 무엇인가요?",c:["물질적인 매질","빛","진공"],a:0,e:"소리는 공기나 물과 같은 매질을 통해 전달됩니다."},
+ {q:"사람의 혈액을 온몸으로 보내는 기관은?",c:["폐","심장","위"],a:1,e:"심장은 혈액을 순환시키는 역할을 합니다."}
+],
+[
+ {q:"병자호란이 일어난 해는 언제인가요?",c:["1592년","1636년","1894년"],a:1,e:"병자호란은 1636년에 일어났습니다."},
+ {q:"조선 후기 실학자로 목민심서를 쓴 인물은?",c:["정약용","박지원","김정호"],a:0,e:"정약용은 목민심서를 저술한 실학자입니다."},
+ {q:"전기 저항의 단위는 무엇인가요?",c:["옴","볼트","암페어"],a:0,e:"저항의 단위는 옴(Ω)입니다."},
+ {q:"지구 대기에서 가장 많은 비율을 차지하는 기체는?",c:["산소","질소","이산화탄소"],a:1,e:"대기의 약 78%는 질소입니다."},
+ {q:"DNA의 기본 구조를 설명하는 대표적인 형태는?",c:["이중 나선","단일 원","정육면체"],a:0,e:"DNA는 대표적으로 이중 나선 구조를 가집니다."}
+],
+[
+ {q:"갑오개혁이 시작된 해는 언제인가요?",c:["1876년","1894년","1910년"],a:1,e:"갑오개혁은 1894년에 시작되었습니다."},
+ {q:"독립협회를 주도한 인물 중 한 명은 누구인가요?",c:["서재필","김유신","최무선"],a:0,e:"서재필은 독립협회 활동을 주도했습니다."},
+ {q:"전력의 단위는 무엇인가요?",c:["와트","옴","쿨롱"],a:0,e:"전력의 단위는 와트(W)입니다."},
+ {q:"빛의 속도는 진공에서 대략 얼마인가요?",c:["초속 3만 km","초속 30만 km","초속 300만 km"],a:1,e:"빛의 속도는 진공에서 약 초속 30만 km입니다."},
+ {q:"산과 염기가 만나 물과 염을 만드는 반응은?",c:["중화 반응","산화 반응","분해 반응"],a:0,e:"산과 염기가 반응하여 물과 염을 만드는 것을 중화 반응이라고 합니다."}
+],
+[
+ {q:"대한제국이 선포된 해는 언제인가요?",c:["1897년","1905년","1919년"],a:0,e:"고종은 1897년 대한제국을 선포했습니다."},
+ {q:"을사늑약이 체결된 해는 언제인가요?",c:["1894년","1905년","1910년"],a:1,e:"을사늑약은 1905년에 체결되었습니다."},
+ {q:"뉴턴의 운동 제2법칙을 나타내는 식은?",c:["F=ma","E=mc²","V=IR"],a:0,e:"힘은 질량과 가속도의 곱으로 나타낼 수 있습니다."},
+ {q:"산화 환원 반응에서 산화란 일반적으로 무엇을 잃는 과정인가요?",c:["전자","양성자","중성자"],a:0,e:"산화는 전자를 잃는 과정입니다."},
+ {q:"유전 정보를 저장하는 생체 분자는 무엇인가요?",c:["DNA","포도당","지방산"],a:0,e:"DNA는 생물의 유전 정보를 저장합니다."}
+],
+[
+ {q:"3·1 운동 이후 상하이에 수립된 조직은?",c:["대한민국 임시정부","독립협회","조선총독부"],a:0,e:"대한민국 임시정부는 1919년 상하이에 수립되었습니다."},
+ {q:"광무개혁을 추진한 황제는 누구인가요?",c:["고종","순종","세종"],a:0,e:"광무개혁은 고종 황제 시기에 추진되었습니다."},
+ {q:"옴의 법칙을 올바르게 나타낸 식은?",c:["V=IR","P=F/A","E=mc²"],a:0,e:"전압은 전류와 저항의 곱입니다."},
+ {q:"전자기 유도 현상을 발견한 과학자는 누구인가요?",c:["패러데이","뉴턴","다윈"],a:0,e:"패러데이는 전자기 유도 현상을 발견했습니다."},
+ {q:"세포에서 ATP를 주로 생산하는 기관은?",c:["미토콘드리아","리보솜","골지체"],a:0,e:"미토콘드리아는 세포의 에너지 생산에 중요한 역할을 합니다."}
+],
+[
+ {q:"조선의 신분 제도에서 양반 아래의 중간 계층으로 분류된 집단은?",c:["중인","백정","노비"],a:0,e:"중인은 기술관이나 서리 등 전문직을 맡기도 했습니다."},
+ {q:"동학농민운동이 일어난 해는 언제인가요?",c:["1862년","1894년","1907년"],a:1,e:"동학농민운동은 1894년에 일어났습니다."},
+ {q:"교류 회로에서 주파수의 단위는 무엇인가요?",c:["헤르츠","테슬라","패럿"],a:0,e:"주파수의 단위는 헤르츠(Hz)입니다."},
+ {q:"열역학 제1법칙은 무엇의 보존을 설명하나요?",c:["에너지","전하","운동량만"],a:0,e:"열역학 제1법칙은 에너지 보존 법칙과 관련됩니다."},
+ {q:"pH가 7보다 작을 때 용액은 일반적으로 어떤 성질인가요?",c:["산성","중성","염기성"],a:0,e:"pH 7 미만은 산성으로 분류됩니다."}
+],
+[
+ {q:"대한민국 임시정부가 수립된 해는 언제인가요?",c:["1910년","1919년","1945년"],a:1,e:"대한민국 임시정부는 1919년에 수립되었습니다."},
+ {q:"일제강점기 민족말살정책과 관련이 깊은 것은?",c:["황국신민화 정책","광무개혁","갑오개혁"],a:0,e:"일제는 황국신민화 정책으로 한국인의 민족 정체성을 억압했습니다."},
+ {q:"교류 전압의 실효값이 220V일 때 최대값은?",c:["약 220V","약 311V","약 440V"],a:1,e:"정현파의 최대값은 실효값에 √2를 곱하므로 약 311V입니다."},
+ {q:"반도체에서 양공이 다수 운반자인 것은?",c:["P형 반도체","N형 반도체","도체"],a:0,e:"P형 반도체는 양공이 다수 운반자입니다."},
+ {q:"열역학 제2법칙과 관련이 깊은 물리량은?",c:["엔트로피","전압","전하량"],a:0,e:"열역학 제2법칙은 고립계의 엔트로피 증가와 관련됩니다."}
+]
+];
+
+function shuffle(array) {
+  const a = array.slice();
+  for(let i=a.length-1;i>0;i--) {
+    const j=Math.floor(Math.random()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+  return a;
+}
+
+function makeMaze() {
+  SIZE = 31 + (stage-1)*2;
+  TILE = canvas.width / SIZE;
+  maze = Array.from({length:SIZE},()=>Array(SIZE).fill(1));
+  const stack=[[1,1]];
+  maze[1][1]=0;
+  const dirs=[[0,-2],[0,2],[-2,0],[2,0]];
+
+  while(stack.length) {
+    const [x,y]=stack[stack.length-1];
+    const shuffled=shuffle(dirs);
+    let moved=false;
+    for(const [dx,dy] of shuffled) {
+      const nx=x+dx, ny=y+dy;
+      if(nx>0 && nx<SIZE-1 && ny>0 && ny<SIZE-1 && maze[ny][nx]===1) {
+        maze[y+dy/2][x+dx/2]=0;
+        maze[ny][nx]=0;
+        stack.push([nx,ny]);
+        moved=true;
+        break;
+      }
+    }
+    if(!moved) stack.pop();
+  }
+  player={x:1,y:1};
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  for(let y=0;y<SIZE;y++) {
+    for(let x=0;x<SIZE;x++) {
+      ctx.fillStyle=maze[y][x]===1 ? "#263238" : "#f5f5f5";
+      ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+    }
+  }
+
+  ctx.fillStyle="#d32f2f";
+  ctx.fillRect((SIZE-2)*TILE,(SIZE-2)*TILE,TILE,TILE);
+  ctx.fillStyle="#fff";
+  ctx.font=`bold ${Math.max(9,TILE*.65)}px Arial`;
+  ctx.fillText("D",(SIZE-2)*TILE+TILE*.25,(SIZE-2)*TILE+TILE*.75);
+
+  ctx.fillStyle="#a5d6a7";
+  ctx.fillRect(TILE,TILE,TILE,TILE);
+
+  ctx.fillStyle="#1565c0";
+  ctx.beginPath();
+  ctx.arc(player.x*TILE+TILE/2,player.y*TILE+TILE/2,TILE*.36,0,Math.PI*2);
+  ctx.fill();
+}
+
+function updateInfo() {
+  timerEl.textContent=timeLeft;
+  livesEl.textContent=lives;
+  stageEl.textContent=stage+" / "+MAX_STAGE;
+  progressEl.textContent=questionIndex+" / 5";
+}
+
+function move(dx,dy) {
+  if(gameOver || won || inQuiz) return;
+  const nx=player.x+dx, ny=player.y+dy;
+  if(nx<0 || ny<0 || nx>=SIZE || ny>=SIZE || maze[ny][nx]===1) return;
+  player.x=nx;
+  player.y=ny;
+  draw();
+  if(nx===SIZE-2 && ny===SIZE-2) startQuiz();
+}
+
+function startMovement() {
+  if(moveInterval) clearInterval(moveInterval);
+  moveInterval=setInterval(()=>{
+    if(inQuiz || gameOver || won) return;
+    let dx=0,dy=0;
+    if(keys.ArrowUp || keys.w || keys.W) dy=-1;
+    else if(keys.ArrowDown || keys.s || keys.S) dy=1;
+    else if(keys.ArrowLeft || keys.a || keys.A) dx=-1;
+    else if(keys.ArrowRight || keys.d || keys.D) dx=1;
+    if(dx!==0 || dy!==0) move(dx,dy);
+  },Math.max(65,115-(stage-1)*5));
+}
+
+function startTimer() {
+  if(timerId) clearInterval(timerId);
+  timerId=setInterval(()=>{
+    if(gameOver || won) return;
+    timeLeft--;
+    updateInfo();
+    if(timeLeft<=0) endGame("제한 시간이 종료되었습니다!");
+  },1000);
+}
+
+function newQuestionSet() {
+  quizSet=shuffle(questionStages[stage-1]).slice(0,5);
+  questionIndex=0;
+}
+
+function startQuiz() {
+  if(inQuiz || gameOver || won) return;
+  inQuiz=true;
+  keys={};
+  newQuestionSet();
+  quizEl.style.display="block";
+  messageEl.textContent="출구를 열기 위해 문제 5개를 맞혀야 합니다!";
+  showQuestion();
+}
+
+function showQuestion() {
+  if(questionIndex>=5) {
+    stageClear();
+    return;
+  }
+  updateInfo();
+  const q=quizSet[questionIndex];
+
+  const shuffledChoices=shuffle(q.c.map((choice,index)=>({
+    text:choice,
+    correct:index===q.a
+  })));
+
+  questionTitle.textContent=`스테이지 ${stage} - 문제 ${questionIndex+1} / 5`;
+  questionText.textContent=q.q;
+  feedbackEl.textContent="";
+  choicesEl.innerHTML="";
+
+  shuffledChoices.forEach((choice,index)=>{
+    const button=document.createElement("button");
+    button.className="choice";
+    button.textContent=String.fromCharCode(65+index)+". "+choice.text;
+    button.onclick=()=>answerQuestion(choice.correct,q);
+    choicesEl.appendChild(button);
+  });
+}
+
+function answerQuestion(correct,q) {
+  if(!inQuiz || gameOver || won) return;
+  choicesEl.querySelectorAll("button").forEach(b=>b.disabled=true);
+
+  if(correct) {
+    feedbackEl.textContent="정답입니다!\n"+q.e;
+    questionIndex++;
+    updateInfo();
+    feedbackTimeout=setTimeout(()=>{
+      if(questionIndex>=5) stageClear();
+      else showQuestion();
+    },1600);
+  } else {
+    lives--;
+    updateInfo();
+    feedbackEl.textContent="오답입니다!\n정답: "+q.c[q.a]+"\n"+q.e+
+      (lives>0 ? "\n새로운 문제 세트로 다시 도전하세요." : "");
+    feedbackTimeout=setTimeout(()=>{
+      if(lives<=0) endGame("목숨을 모두 잃었습니다!");
+      else {
+        newQuestionSet();
+        showQuestion();
+      }
+    },2500);
+  }
+}
+
+function stageClear() {
+  if(gameOver || won) return;
+  inQuiz=false;
+  keys={};
+  quizEl.style.display="none";
+  stageButtons.style.display="block";
+
+  if(stage<MAX_STAGE) {
+    messageEl.textContent=`🎉 ${stage} 스테이지 탈출 성공!`;
+    nextStageButton.style.display="inline-block";
+    nextStageButton.textContent="다음 스테이지 가기";
+  } else {
+    won=true;
+    clearInterval(timerId);
+    clearInterval(moveInterval);
+    messageEl.textContent="🏆 축하합니다! 10개 스테이지를 모두 클리어했습니다!";
+    nextStageButton.style.display="none";
+    ctx.fillStyle="rgba(0,120,0,.88)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle="white";
+    ctx.font="bold 34px Arial";
+    ctx.textAlign="center";
+    ctx.fillText("ALL STAGES CLEAR!",canvas.width/2,canvas.height/2);
+    ctx.textAlign="start";
+  }
+}
+
+function nextStage() {
+  if(gameOver || won || stage>=MAX_STAGE) return;
+
+  stage++;
+
+  // 스테이지별 목숨과 시간 초기화
+  lives=getStageLives(stage);
+  timeLeft=getStageTime(stage);
+
+  inQuiz=false;
+  keys={};
+  clearTimeout(feedbackTimeout);
+
+  stageButtons.style.display="none";
+  quizEl.style.display="none";
+
+  messageEl.textContent=
+    `${stage} 스테이지 시작! 목숨 ${lives}개, 제한 시간 ${timeLeft/60}분!`;
+
+  makeMaze();
+  draw();
+  updateInfo();
+
+  // 이전 타이머를 종료하고 새 시간으로 타이머 시작
+  startTimer();
+  startMovement();
+}
+
+function endGame(reason) {
+  if(gameOver || won) return;
+  gameOver=true;
+  inQuiz=false;
+  clearInterval(timerId);
+  clearInterval(moveInterval);
+  quizEl.style.display="none";
+  stageButtons.style.display="none";
+  messageEl.textContent="게임 종료: "+reason;
+  ctx.fillStyle="rgba(0,0,0,.8)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle="white";
+  ctx.font="bold 36px Arial";
+  ctx.textAlign="center";
+  ctx.fillText("GAME OVER",canvas.width/2,canvas.height/2);
+  ctx.textAlign="start";
+}
+
+function resetGame() {
+  clearInterval(timerId);
+  clearInterval(moveInterval);
+  clearTimeout(feedbackTimeout);
+
+  stage=1;
+  lives=getStageLives(stage);
+  timeLeft=getStageTime(stage);
+  gameOver=false;
+  won=false;
+  inQuiz=false;
+  keys={};
+  questionIndex=0;
+
+  quizEl.style.display="none";
+  stageButtons.style.display="none";
+
+  makeMaze();
+  messageEl.textContent="미로를 탈출하세요!";
+  draw();
+  updateInfo();
+  startTimer();
+  startMovement();
+}
+
+document.addEventListener("keydown",e=>{
+  if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+  if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","w","a","s","d","W","A","S","D"].includes(e.key)) keys[e.key]=true;
+});
+document.addEventListener("keyup",e=>{keys[e.key]=false;});
+window.addEventListener("blur",()=>{keys={};});
+
+nextStageButton.addEventListener("click",nextStage);
+
+// 모바일 화면 이동 버튼: 누르고 있는 동안 연속 이동
+const touchKeyMap = {up:"ArrowUp", down:"ArrowDown", left:"ArrowLeft", right:"ArrowRight"};
+document.querySelectorAll("#touchControls button").forEach(button => {
+  const key = touchKeyMap[button.dataset.dir];
+  const press = event => { event.preventDefault(); keys[key] = true; };
+  const release = event => { event.preventDefault(); keys[key] = false; };
+  button.addEventListener("pointerdown", press);
+  button.addEventListener("pointerup", release);
+  button.addEventListener("pointerleave", release);
+  button.addEventListener("pointercancel", release);
+});
+document.getElementById("restart").addEventListener("click",resetGame);
+
+resetGame();
+})();
+</script>
+
+<script>
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(console.error));
+}
+</script>
+</body>
+</html>
